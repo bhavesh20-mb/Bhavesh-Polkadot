@@ -221,8 +221,6 @@ impl<T: Config> Pallet<T> {
 		all_validators: Vec<ValidatorId>,
 		queued: Vec<ValidatorId>,
 	) {
-		let prev_config = <configuration::Pallet<T>>::config();
-
 		let random_seed = {
 			let mut buf = [0u8; 32];
 			// TODO: audit usage of randomness API
@@ -233,11 +231,8 @@ impl<T: Config> Pallet<T> {
 			buf
 		};
 
-		// We can't pass the new config into the thing that determines the new config,
-		// so we don't pass the `SessionChangeNotification` into this module.
-		configuration::Pallet::<T>::initializer_on_new_session(&session_index);
-
-		let new_config = <configuration::Pallet<T>>::config();
+		let (prev_config, new_config) =
+			configuration::Pallet::<T>::initializer_on_new_session(&session_index);
 
 		let validators = shared::Pallet::<T>::initializer_on_new_session(
 			session_index,

@@ -1064,13 +1064,23 @@ impl<T: Config> Pallet<T> {
 	pub(crate) fn initializer_finalize() {}
 
 	/// Called by the initializer to note that a new session has started.
-	pub(crate) fn initializer_on_new_session(session_index: &SessionIndex) {
+	///
+	/// Returns the configuration that was actual before the session change and the configuration
+	/// that became active after the session change. If there were no scheduled changes, both will
+	/// be the same.
+	pub(crate) fn initializer_on_new_session(
+		session_index: &SessionIndex,
+	) -> (HostConfiguration<T::BlockNumber>, HostConfiguration<T::BlockNumber>) {
 		let pending_configs = <PendingConfigs<T>>::get();
+		let prev_config = <Self as Store>::ActiveConfig::get();
+
+		// No pending configuration changes, so we're done.
 		if pending_configs.is_empty() {
-			return
+			let new_config = prev_config.clone();
+			return (prev_config, new_config)
 		}
 
-		let (past_and_present, future) = pending_configs
+		let (mut past_and_present, future) = pending_configs
 			.into_iter()
 			.partition::<Vec<_>, _>(|&(apply_at_session, _)| apply_at_session <= *session_index);
 
@@ -1082,11 +1092,18 @@ impl<T: Config> Pallet<T> {
 				"Skipping applying configuration changes scheduled sessions in the past",
 			);
 		}
-		if let Some((_, pending)) = past_and_present.last() {
-			<Self as Store>::ActiveConfig::put(pending);
-		}
+
+		let new_config = match past_and_present.pop() {
+			Some((_, pending)) => {
+				<Self as Store>::ActiveConfig::put(&pending);
+				pending
+			},
+			None => prev_config.clone(),
+		};
 
 		<PendingConfigs<T>>::put(future);
+
+		(prev_config, new_config)
 	}
 
 	/// Return the session index that should be used for any future scheduled changes.
@@ -1167,9 +1184,11 @@ mod tests {
 
 	use frame_support::assert_ok;
 
-	fn on_new_session(session_index: SessionIndex) {
+	fn on_new_session(
+		session_index: SessionIndex,
+	) -> (HostConfiguration<u32>, HostConfiguration<u32>) {
 		ParasShared::set_session_index(session_index);
-		Configuration::initializer_on_new_session(&session_index);
+		Configuration::initializer_on_new_session(&session_index)
 	}
 
 	#[test]
@@ -1179,6 +1198,25 @@ mod tests {
 			// with other values, but that should receive a more rigorious testing.
 			on_new_session(1);
 			assert_eq!(Configuration::scheduled_session(), 3);
+		});
+	}
+
+	#[test]
+	fn initializer_on_new_session() {
+		new_test_ext(Default::default()).execute_with(|| {
+			let (prev_config, new_config) = on_new_session(1);
+			assert_eq!(prev_config, new_config);
+			assert_ok!(Configuration::set_validation_upgrade_delay(Origin::root(), 100));
+
+			let (prev_config, new_config) = on_new_session(2);
+			assert_eq!(prev_config, new_config);
+
+			let (prev_config, new_config) = on_new_session(3);
+			assert_eq!(prev_config, HostConfiguration::default());
+			assert_eq!(
+				new_config,
+				HostConfiguration { validation_upgrade_delay: 100, ..prev_config }
+			);
 		});
 	}
 
